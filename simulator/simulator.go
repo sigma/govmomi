@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vmware/govmomi/compat"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/simulator/internal"
@@ -84,6 +85,8 @@ type Service struct {
 	ServeMux *http.ServeMux
 	// RegisterEndpoints will initialize any endpoints added via RegisterEndpoint
 	RegisterEndpoints bool
+
+	api *compat.API
 }
 
 // Server provides a simulator Service over HTTP
@@ -103,6 +106,7 @@ func New(instance *ServiceInstance) *Service {
 		sdk:     make(map[string]*Registry),
 	}
 
+	s.api = compat.GetAPI(instance.Content.About.ApiVersion)
 	s.client, _ = vim25.NewClient(context.Background(), s)
 
 	return s
@@ -164,6 +168,10 @@ func (s *Service) call(ctx *Context, method *Method) soap.HasFault {
 
 	// Lowercase methods can't be accessed outside their package
 	name := strings.Title(method.Name)
+	existsInAPI := true
+	if ctx.Map.Namespace == "vim25" {
+		existsInAPI = s.api.ManagedObjects[method.This.Type] != nil && s.api.ManagedObjects[method.This.Type].Methods[name] != nil
+	}
 
 	if strings.HasSuffix(name, vTaskSuffix) {
 		// Make golint happy renaming "Foo_Task" -> "FooTask"
@@ -171,7 +179,7 @@ func (s *Service) call(ctx *Context, method *Method) soap.HasFault {
 	}
 
 	m := reflect.ValueOf(handler).MethodByName(name)
-	if !m.IsValid() {
+	if !m.IsValid() || !existsInAPI {
 		msg := fmt.Sprintf("%s does not implement: %s", method.This, method.Name)
 		log.Print(msg)
 		fault := &types.MethodNotFound{Receiver: method.This, Method: method.Name}
